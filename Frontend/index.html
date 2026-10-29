@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QML-02 | QpiAI EV Charging Pipeline</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: { 950: '#030712' }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans p-6">
+
+    <!-- Header / Pipeline Status -->
+    <header class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-800 pb-4 mb-6 gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-white flex items-center gap-2">
+                <i data-lucide="zap" class="text-cyan-400"></i>
+                Quant-A-Maze 3.0 — QML-02
+            </h1>
+            <p class="text-xs text-slate-400 mt-1">Grid-Constrained Commercial EV Fleet Charging Optimization</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <span class="bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5 font-medium">
+                <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                Active Pipeline: QpiAI Cloud + QpiAI Opt
+            </span>
+            <button onclick="runOptimization()" class="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs px-4 py-2 rounded-lg transition-all shadow-lg shadow-cyan-500/20">
+                Run Cloud + Opt Optimization
+            </button>
+        </div>
+    </header>
+
+    <section class="max-w-7xl mx-auto mb-6 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
+        <div class="flex flex-wrap justify-between items-center gap-3 mb-3">
+            <div>
+                <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+                    <i data-lucide="truck" class="w-4 h-4 text-cyan-400"></i> Fleet Vehicles
+                </h2>
+                <p class="text-xs text-slate-400 mt-1">Edit vehicle details here, then run optimization or benchmarking.</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <input type="file" id="fleet-csv-file" accept=".csv,text/csv" class="hidden">
+                <button type="button" id="import-fleet-csv" class="bg-slate-800 hover:bg-slate-700 text-emerald-300 font-medium text-xs px-3 py-2 rounded-lg transition-colors">
+                    Import Fleet CSV
+                </button>
+                <button type="button" id="add-vehicle" class="bg-slate-800 hover:bg-slate-700 text-cyan-300 font-medium text-xs px-3 py-2 rounded-lg transition-colors">
+                    + Add Vehicle
+                </button>
+            </div>
+        </div>
+        <p id="fleet-data-status" class="text-xs text-cyan-300 mb-3" role="status" aria-live="polite">Loading current fleet from the project CSV…</p>
+        <p class="text-[10px] text-slate-500 mb-3">CSV headers required: id, location, arrival_soc, target_soc, arrival_slot, departure_slot, charger_type. Optional: battery_capacity_kwh. Charger type must be fast or standard.</p>
+        <p id="fleet-editor-error" class="hidden text-xs text-rose-400 mb-3" role="alert"></p>
+        <div class="overflow-x-auto">
+            <table class="w-full min-w-[1050px] text-xs text-left text-slate-300">
+                <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+                    <tr>
+                        <th class="p-2">Vehicle ID</th>
+                        <th class="p-2">Bay Location</th>
+                        <th class="p-2">Arrival SoC (%)</th>
+                        <th class="p-2">Target SoC (%)</th>
+                        <th class="p-2">Arrival Slot</th>
+                        <th class="p-2">Departure Slot</th>
+                        <th class="p-2">Charger</th>
+                        <th class="p-2">Battery (kWh)</th>
+                        <th class="p-2">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="vehicle-editor-body"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <main class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        <!-- Controls & Telemetry Column -->
+        <section class="space-y-6"
+            <!-- Controls Card -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
+                <h2 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                    <i data-lucide="sliders" class="w-4 h-4 text-cyan-400"></i> Grid & Tariff Controls
+                </h2>
+                <div class="space-y-4 text-xs">
+                    <div>
+                        <div class="flex justify-between mb-1">
+                            <label class="text-slate-400">Transformer Capacity Limit</label>
+                            <span id="slider-val" class="text-cyan-400 font-bold">150 kW</span>
+                        </div>
+                        <input type="range" id="slider-limit" min="50" max="250" value="150" step="10" 
+                               oninput="document.getElementById('slider-val').innerText = this.value + ' kW'" 
+                               class="w-full accent-cyan-400 cursor-pointer">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Execution Telemetry Terminal -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
+                <h2 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i> Live Execution Telemetry
+                </h2>
+                <div id="telemetry-logs" class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 h-48 overflow-y-auto font-mono text-[11px] text-slate-300 space-y-1">
+                    <p class="text-slate-500">[System Ready] Click "Run Cloud + Opt Optimization" to submit the SoC circuit and charging QUBO.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Chart, Fleet Details & Benchmark Column -->
+        <section class="lg:col-span-2 space-y-6">
+            <!-- Load Curve Chart Card -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+                        <i data-lucide="activity" class="w-4 h-4 text-cyan-400"></i> 24-Hour Feeder Power Profile (kW)
+                    </h2>
+                    <button onclick="runBenchmark()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5">
+                        <i data-lucide="line-chart" class="w-3.5 h-3.5"></i> Run Benchmark Analysis
+                    </button>
+                </div>
+                <div class="h-64">
+                    <canvas id="loadChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Detailed Fleet Telemetry Table -->
+            <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
+                <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <i data-lucide="truck" class="w-4 h-4 text-cyan-400"></i> Fleet Schedule & Arrival Recommendations
+                </h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs text-left text-slate-300">
+                        <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+                            <tr>
+                                <th class="p-2.5">Vehicle ID</th>
+                                <th class="p-2.5">Bay Location</th>
+                                <th class="p-2.5">Deadline</th>
+                                <th class="p-2.5">Assigned Charging Window</th>
+                                <th class="p-2.5 text-emerald-400">Recommended Arrival</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-table-body">
+                            <tr>
+                                <td colspan="5" class="p-4 text-center text-slate-500">Run optimization to view detailed vehicle schedule metadata.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Performance Benchmark Matrix Card -->
+            <div id="benchmark-card" class="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
+                <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <i data-lucide="award" class="w-4 h-4 text-cyan-400"></i> Performance Benchmark Comparison
+                </h3>
+                <p id="benchmark-status" class="text-xs text-slate-400 mb-3" role="status" aria-live="polite">Run optimization or benchmark analysis to populate this comparison.</p>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs text-left text-slate-300">
+                        <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+                            <tr>
+                                <th class="p-2.5">Metric</th>
+                                <th class="p-2.5 text-rose-400">Uncoordinated ("Dumb")</th>
+                                <th class="p-2.5 text-emerald-400">QpiAI Cloud + Opt</th>
+                                <th class="p-2.5 text-cyan-400">Optimization Gain</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="border-b border-slate-800/50">
+                                <td class="p-2.5 font-medium text-white">Peak Transformer Load</td>
+                                <td id="bm-uncoord-peak" class="p-2.5 text-rose-400">--</td>
+                                <td id="bm-qpiai-peak" class="p-2.5 text-emerald-400">--</td>
+                                <td id="bm-delta-peak" class="p-2.5 text-cyan-400 font-bold">--</td>
+                            </tr>
+                            <tr class="border-b border-slate-800/50">
+                                <td class="p-2.5 font-medium text-white">Total Electricity Cost</td>
+                                <td id="bm-uncoord-cost" class="p-2.5 text-rose-400">--</td>
+                                <td id="bm-qpiai-cost" class="p-2.5 text-emerald-400">--</td>
+                                <td id="bm-delta-cost" class="p-2.5 text-cyan-400 font-bold">--</td>
+                            </tr>
+                            <tr>
+                                <td class="p-2.5 font-medium text-white">Grid Capacity Breaches</td>
+                                <td id="bm-uncoord-breaches" class="p-2.5 text-rose-400">--</td>
+                                <td id="bm-qpiai-breaches" class="p-2.5 text-emerald-400">--</td>
+                                <td id="bm-delta-breaches" class="p-2.5 text-cyan-400 font-bold">--</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- JavaScript Integration Logic -->
+    <script>
+        lucide.createIcons();
+        
+        let chartInstance = null;
+        const fleetVehicles = [
+            { id: "EV-101", location: "Depot-North Bay 1", arrival_soc: 20, target_soc: 80, arrival_slot: 2, departure_slot: 12, charger_type: "fast", battery_capacity_kwh: 60 },
+            { id: "EV-102", location: "Depot-North Bay 2", arrival_soc: 15, target_soc: 90, arrival_slot: 4, departure_slot: 18, charger_type: "standard", battery_capacity_kwh: 60 },
+            { id: "EV-103", location: "Depot-South Bay 1", arrival_soc: 30, target_soc: 85, arrival_slot: 8, departure_slot: 22, charger_type: "fast", battery_capacity_kwh: 60 },
+            { id: "EV-104", location: "Depot-South Bay 2", arrival_soc: 10, target_soc: 75, arrival_slot: 12, departure_slot: 24, charger_type: "standard", battery_capacity_kwh: 60 }
+        ];
+
+        function parseCsvRows(text) {
+            const rows = [];
+            let row = [];
+            let field = "";
+            let quoted = false;
+
+            for (let index = 0; index < text.length; index += 1) {
+                const character = text[index];
+                if (quoted) {
+                    if (character === '"' && text[index + 1] === '"') {
+                        field += '"';
+                        index += 1;
+                    } else if (character === '"') {
+                        quoted = false;
+                    } else {
+                        field += character;
+                    }
+                } else if (character === '"' && field.length === 0) {
+                    quoted = true;
+                } else if (character === ",") {
+                    row.push(field.trim());
+                    field = "";
+                } else if (character === "\n" || character === "\r") {
+                    row.push(field.trim());
+                    if (row.some(value => value !== "")) rows.push(row);
+                    row = [];
+                    field = "";
+                    if (character === "\r" && text[index + 1] === "\n") index += 1;
+                } else {
+                    field += character;
+                }
+            }
+
+            if (quoted) throw new Error("The CSV contains an unclosed quoted field.");
+            row.push(field.trim());
+            if (row.some(value => value !== "")) rows.push(row);
+            return rows;
+        }
+
+        function parseFleetCsv(text) {
+            const rows = parseCsvRows(text.replace(/^\uFEFF/, ""));
+            if (rows.length < 2) throw new Error("The CSV needs a header row and at least one vehicle row.");
+
+            const headers = rows[0].map(header => header.trim().toLowerCase());
+            if (new Set(headers).size !== headers.length) throw new Error("The CSV contains duplicate column headers.");
+            const required = ["id", "location", "arrival_soc", "target_soc", "arrival_slot", "departure_slot", "charger_type"];
+            const missing = required.filter(header => !headers.includes(header));
+            if (missing.length) throw new Error(`Missing required CSV columns: ${missing.join(", ")}.`);
+
+            const numberFields = ["arrival_soc", "target_soc", "arrival_slot", "departure_slot", "battery_capacity_kwh"];
+            const imported = rows.slice(1).map((values, rowIndex) => {
+                if (values.length !== headers.length) {
+                    throw new Error(`CSV row ${rowIndex + 2} has ${values.length} values; expected ${headers.length}.`);
+                }
+                const vehicle = Object.fromEntries(headers.map((header, index) => [header, values[index]]));
+                vehicle.id = vehicle.id.trim();
+                vehicle.location = vehicle.location.trim();
+                vehicle.charger_type = vehicle.charger_type.trim().toLowerCase();
+                if (vehicle.battery_capacity_kwh === undefined || vehicle.battery_capacity_kwh === "") {
+                    vehicle.battery_capacity_kwh = 60;
+                }
+                for (const field of numberFields) {
+                    vehicle[field] = Number(vehicle[field]);
+                    if (!Number.isFinite(vehicle[field])) {
+                        throw new Error(`CSV row ${rowIndex + 2} has an invalid ${field} value.`);
+                    }
+                }
+                if (!vehicle.id || !vehicle.location) {
+                    throw new Error(`CSV row ${rowIndex + 2} needs both an ID and a location.`);
+                }
+                if (vehicle.arrival_soc < 0 || vehicle.arrival_soc > 100 || vehicle.target_soc < 0 || vehicle.target_soc > 100) {
+                    throw new Error(`CSV row ${rowIndex + 2} has SoC values outside 0–100.`);
+                }
+                if (!Number.isInteger(vehicle.arrival_slot) || vehicle.arrival_slot < 1 || vehicle.arrival_slot > 24
+                    || !Number.isInteger(vehicle.departure_slot) || vehicle.departure_slot < vehicle.arrival_slot || vehicle.departure_slot > 24) {
+                    throw new Error(`CSV row ${rowIndex + 2} has invalid arrival/departure slots.`);
+                }
+                if (vehicle.battery_capacity_kwh <= 0 || !["fast", "standard"].includes(vehicle.charger_type)) {
+                    throw new Error(`CSV row ${rowIndex + 2} needs a positive battery capacity and charger_type fast or standard.`);
+                }
+                return vehicle;
+            });
+
+            const ids = imported.map(vehicle => vehicle.id);
+            if (new Set(ids).size !== ids.length) throw new Error("Vehicle IDs in the CSV must be unique.");
+            return imported;
+        }
+
+        document.getElementById("import-fleet-csv").addEventListener("click", () => {
+            document.getElementById("fleet-csv-file").click();
+        });
+
+        document.getElementById("fleet-csv-file").addEventListener("change", async event => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const status = document.getElementById("fleet-data-status");
+            try {
+                const imported = parseFleetCsv(await file.text());
+                fleetVehicles.splice(0, fleetVehicles.length, ...imported);
+                renderVehicleEditor();
+                document.getElementById("fleet-editor-error").classList.add("hidden");
+                status.textContent = `Loaded ${imported.length} vehicles from ${file.name}.`;
+                status.className = "text-xs text-emerald-400 mb-3";
+            } catch (error) {
+                status.textContent = `Could not load fleet CSV: ${error.message}`;
+                status.className = "text-xs text-rose-400 mb-3";
+            } finally {
+                event.target.value = "";
+            }
+        });
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, character => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            })[character]);
+        }
+
+        function renderVehicleEditor() {
+            const tbody = document.getElementById("vehicle-editor-body");
+            tbody.innerHTML = fleetVehicles.map((vehicle, index) => `
+                <tr class="border-b border-slate-800/50">
+                    <td class="p-1"><input aria-label="Vehicle ID" data-index="${index}" data-field="id" value="${escapeHtml(vehicle.id)}" class="w-24 rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white"></td>
+                    <td class="p-1"><input aria-label="Bay location" data-index="${index}" data-field="location" value="${escapeHtml(vehicle.location)}" class="w-40 rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white"></td>
+                    <td class="p-1"><input aria-label="Arrival state of charge" data-index="${index}" data-field="arrival_soc" type="number" min="0" max="100" step="1" value="${vehicle.arrival_soc}" class="w-20 rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white"></td>
+                    <td class="p-1"><input aria-label="Target state of charge" data-index="${index}" data-field="target_soc" type="number" min="0" max="100" step="1" value="${vehicle.target_soc}" class="w-20 rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white"></td>
+                    <td class="p-1"><input aria-label="Arrival slot" data-index="${index}" data-field="arrival_slot" type="number" min="1" max="24" step="1" value="${vehicle.arrival_slot}" class="w-16 rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white"></td>
+                    <td class="p-1"><input aria-label="Departure slot" data-index="${index}" data-field="departure_slot" type="number" min="1" max="24" step="1" value="${vehicle.departure_slot}" class="w-16 rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white"></td>
+                    <td class="p-1">
+                        <select aria-label="Charger type" data-index="${index}" data-field="charger_type" class="rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white">
+                            <option value="fast" ${vehicle.charger_type === "fast" ? "selected" : ""}>Fast</option>
+                            <option value="standard" ${vehicle.charger_type === "standard" ? "selected" : ""}>Standard</option>
+                        </select>
+                    </td>
+                    <td class="p-1"><input aria-label="Battery capacity" data-index="${index}" data-field="battery_capacity_kwh" type="number" min="1" step="1" value="${vehicle.battery_capacity_kwh}" class="w-20 rounded bg-slate-950 border border-slate-700 px-2 py-1 text-white"></td>
+                    <td class="p-1"><button type="button" data-remove-index="${index}" class="text-rose-400 hover:text-rose-300 px-2 py-1">Remove</button></td>
+                </tr>
+            `).join("");
+        }
+
+        document.getElementById("vehicle-editor-body").addEventListener("input", event => {
+            const input = event.target;
+            if (!input.matches("[data-field]")) return;
+            const vehicle = fleetVehicles[Number(input.dataset.index)];
+            if (!vehicle) return;
+            const field = input.dataset.field;
+            vehicle[field] = input.type === "number"
+                ? (input.value === "" ? "" : Number(input.value))
+                : input.value;
+            document.getElementById("fleet-editor-error").classList.add("hidden");
+        });
+
+        document.getElementById("vehicle-editor-body").addEventListener("change", event => {
+            const input = event.target;
+            if (!input.matches("[data-field]")) return;
+            const vehicle = fleetVehicles[Number(input.dataset.index)];
+            if (!vehicle) return;
+            const field = input.dataset.field;
+            if (input.type === "number") vehicle[field] = input.value === "" ? "" : Number(input.value);
+            document.getElementById("fleet-editor-error").classList.add("hidden");
+        });
+
+        document.getElementById("vehicle-editor-body").addEventListener("click", event => {
+            const button = event.target.closest("[data-remove-index]");
+            if (!button) return;
+            fleetVehicles.splice(Number(button.dataset.removeIndex), 1);
+            renderVehicleEditor();
+        });
+
+        document.getElementById("add-vehicle").addEventListener("click", () => {
+            let nextId = 101;
+            while (fleetVehicles.some(vehicle => vehicle.id === `EV-${nextId}`)) nextId += 1;
+            fleetVehicles.push({
+                id: `EV-${nextId}`,
+                location: "New Bay",
+                arrival_soc: 20,
+                target_soc: 80,
+                arrival_slot: 1,
+                departure_slot: 24,
+                charger_type: "standard",
+                battery_capacity_kwh: 60
+            });
+            renderVehicleEditor();
+        });
+
+        function buildPayload(limitKw) {
+            return {
+                transformer_limit_kw: limitKw,
+                peak_demand_surcharge: 15.0,
+                off_peak_rate: 0.10,
+                peak_rate: 0.35,
+                peak_start_slot: 14,
+                peak_end_slot: 20,
+                lambda_1_target: 10.0,
+                lambda_2_grid: 5.0,
+                evs: fleetVehicles.map(vehicle => ({ ...vehicle }))
+            };
+        }
+
+        async function loadCurrentFleet() {
+            const status = document.getElementById("fleet-data-status");
+            try {
+                const response = await fetch("http://127.0.0.1:8000/api/load-dataset");
+                const data = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error(data?.detail || `Fleet dataset API returned HTTP ${response.status}.`);
+                }
+                if (data?.status !== "success" || !Array.isArray(data.evs) || data.evs.length === 0) {
+                    throw new Error("Fleet dataset API returned no vehicle records.");
+                }
+
+                fleetVehicles.splice(0, fleetVehicles.length, ...data.evs);
+                renderVehicleEditor();
+                status.textContent = `Loaded ${data.total_vehicles} vehicles directly from ${data.source}.`;
+                status.className = "text-xs text-emerald-400 mb-3";
+            } catch (error) {
+                status.textContent = `Could not load the project fleet CSV: ${error.message}. Showing sample vehicles.`;
+                status.className = "text-xs text-rose-400 mb-3";
+            }
+        }
+
+        function validateFleet() {
+            const error = document.getElementById("fleet-editor-error");
+            const ids = fleetVehicles.map(vehicle => vehicle.id.trim());
+            let message = "";
+
+            if (fleetVehicles.length === 0) {
+                message = "Add at least one vehicle before running.";
+            } else if (ids.some(id => !id)) {
+                message = "Every vehicle must have an ID.";
+            } else if (new Set(ids).size !== ids.length) {
+                message = "Vehicle IDs must be unique.";
+            } else if (fleetVehicles.some(vehicle =>
+                !vehicle.location.trim()
+                || !Number.isFinite(vehicle.arrival_soc) || vehicle.arrival_soc < 0 || vehicle.arrival_soc > 100
+                || !Number.isFinite(vehicle.target_soc) || vehicle.target_soc < 0 || vehicle.target_soc > 100
+                || !Number.isInteger(vehicle.arrival_slot) || vehicle.arrival_slot < 1 || vehicle.arrival_slot > 24
+                || !Number.isInteger(vehicle.departure_slot) || vehicle.departure_slot < vehicle.arrival_slot || vehicle.departure_slot > 24
+                || !Number.isFinite(vehicle.battery_capacity_kwh) || vehicle.battery_capacity_kwh <= 0
+            )) {
+                message = "Check vehicle values: SoC must be 0–100%, slots 1–24 with departure after arrival, and battery capacity must be positive.";
+            }
+
+            error.textContent = message;
+            error.classList.toggle("hidden", !message);
+            return !message;
+        }
+
+        renderVehicleEditor();
+        loadCurrentFleet();
+
+        // Helper to convert 30-min slot index (1..24) to clock time string
+        function formatSlotToTime(slotValue) {
+            if (!slotValue) return "Slot 1 (00:00)";
+            if (typeof slotValue === "string" && slotValue.includes("(")) return slotValue;
+            
+            const slotNum = typeof slotValue === "number" ? slotValue : (parseInt(String(slotValue).replace(/\D/g, '')) || 1);
+            const totalMinutes = (slotNum - 1) * 30;
+            const hours = Math.floor(totalMinutes / 60);
+            const mins = totalMinutes % 60;
+            const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+            return `Slot ${slotNum} (${timeStr})`;
+        }
+
+        // Helper to format assigned slot range
+        function formatAssignedSlots(slots, rawWindow) {
+            if (rawWindow) return rawWindow;
+            if (!slots || !Array.isArray(slots) || slots.length === 0) return "Unassigned";
+            
+            const minSlot = Math.min(...slots);
+            const maxSlot = Math.max(...slots);
+            const hours = slots.length * 0.5;
+            
+            return minSlot === maxSlot 
+                ? `Slot ${minSlot} (${hours.toFixed(1)}h total)` 
+                : `Slots ${minSlot}–${maxSlot} (${hours.toFixed(1)}h total)`;
+        }
+
+        function renderBenchmarkResults(bm) {
+            document.getElementById("bm-uncoord-peak").innerText = `${bm.uncoordinated.peak_kw} kW`;
+            document.getElementById("bm-qpiai-peak").innerText = `${bm.optimized.peak_kw} kW`;
+            document.getElementById("bm-delta-peak").innerText = `${bm.improvements.peak_reduction_pct}% change`;
+            document.getElementById("bm-uncoord-cost").innerText = `$${bm.uncoordinated.total_cost}`;
+            document.getElementById("bm-qpiai-cost").innerText = `$${bm.optimized.total_cost}`;
+            document.getElementById("bm-delta-cost").innerText = `$${bm.improvements.cost_savings_dollars} saved (${bm.improvements.cost_savings_pct}%)`;
+            document.getElementById("bm-uncoord-breaches").innerText = `${bm.uncoordinated.capacity_violations} overloaded slots`;
+            document.getElementById("bm-qpiai-breaches").innerText = `${bm.optimized.capacity_violations} breaches`;
+            document.getElementById("bm-delta-breaches").innerText = `${bm.optimized.capacity_violations === 0 ? "No" : "Some"} optimized breaches`;
+
+            const status = document.getElementById("benchmark-status");
+            status.textContent = "Benchmark comparison updated for the current fleet and grid settings.";
+            status.className = "text-xs text-emerald-400 mb-3";
+        }
+
+        // Initialize Empty Load Chart
+        const ctx = document.getElementById('loadChart').getContext('2d');
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: Array.from({length: 24}, (_, i) => `t_${i+1}`),
+                datasets: [
+                    { label: 'QpiAI Load (kW)', data: Array(24).fill(0), backgroundColor: '#22d3ee' },
+                    { label: 'Limit Threshold (150 kW)', data: Array(24).fill(150), type: 'line', borderColor: '#f43f5e', borderDash: [4, 4], pointRadius: 0 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } },
+                    x: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } }
+                },
+                plugins: { legend: { labels: { color: '#f8fafc' } } }
+            }
+        });
+
+        async function runOptimization() {
+            try {
+                if (!validateFleet()) return;
+                const limitKw = parseFloat(document.getElementById("slider-limit").value);
+                const payload = buildPayload(limitKw);
+
+                const res = await fetch("http://127.0.0.1:8000/api/optimize", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json();
+                
+                if (data.status === "success") {
+                    // 1. Update Telemetry Terminal Logs
+                    const logContainer = document.getElementById("telemetry-logs");
+                    logContainer.innerHTML = data.logs.map(log => `<p class="text-emerald-400">${log}</p>`).join("");
+                    logContainer.scrollTop = logContainer.scrollHeight;
+
+                    // 2. Update Power Profile Chart
+                    chartInstance.data.datasets[0].data = data.slot_loads;
+                    chartInstance.data.datasets[1].data = Array(24).fill(limitKw);
+                    chartInstance.update();
+
+                    // 3. Render Fleet Telemetry Table Rows
+                    if (data.fleet_details) {
+                        const tbody = document.getElementById("fleet-table-body");
+                        tbody.innerHTML = data.fleet_details.map(ev => {
+                            const deadlineStr = formatSlotToTime(ev.departure_deadline || ev.explicit_departure_deadline);
+                            const windowStr = formatAssignedSlots(ev.assigned_time_slots, ev.assigned_charging_window);
+                            const arrivalStr = formatSlotToTime(ev.recommended_arrival || ev.recommended_arrival_slot);
+
+                            return `
+                                <tr class="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                                    <td class="p-2.5 font-bold text-white">${escapeHtml(ev.id)}</td>
+                                    <td class="p-2.5 text-slate-300">${escapeHtml(ev.location)}</td>
+                                    <td class="p-2.5 text-rose-400 font-medium">${escapeHtml(deadlineStr)}</td>
+                                    <td class="p-2.5 text-cyan-400 font-mono">${escapeHtml(windowStr)}</td>
+                                    <td class="p-2.5 text-emerald-400 font-semibold flex items-center gap-1.5">
+                                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                        ${escapeHtml(arrivalStr)}
+                                    </td>
+                                </tr>
+                            `;
+                        }).join("");
+                    }
+                    if (data.benchmark) renderBenchmarkResults(data.benchmark);
+                } else {
+                    throw new Error(data.detail || "Optimization returned an unexpected response.");
+                }
+            } catch (err) {
+                alert(`Unable to run optimization: ${err.message}`);
+            }
+        }
+
+        async function runBenchmark() {
+            const status = document.getElementById("benchmark-status");
+            try {
+                if (!validateFleet()) return;
+                status.textContent = "Calculating benchmark comparison…";
+                status.className = "text-xs text-slate-400 mb-3";
+                const limitKw = parseFloat(document.getElementById("slider-limit").value);
+                const payload = buildPayload(limitKw);
+
+                const res = await fetch("http://127.0.0.1:8000/api/benchmark", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.detail || `Benchmark API returned HTTP ${res.status}.`);
+                if (data?.status !== "success" || !data.benchmark) {
+                    throw new Error("Benchmark API returned an unexpected response.");
+                }
+                renderBenchmarkResults(data.benchmark);
+            } catch (err) {
+                status.textContent = `Unable to load benchmark: ${err.message}`;
+                status.className = "text-xs text-rose-400 mb-3";
+            }
+        }
+    </script>
+</body>
+</html>
